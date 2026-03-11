@@ -196,14 +196,38 @@ def import_fba_inventory_from_report(conn: sqlite3.Connection, df: pd.DataFrame)
 
 
 def import_fba_inventory_csv(conn: sqlite3.Connection, file) -> int:
-    """FBA在庫管理レポートTSV（UTF-8, タブ区切り）を取り込む
+    """セラーセントラルFBA在庫管理レポートCSV（CP932, カンマ区切り）を取り込む
     inventory_snapshotテーブルにwarehouse='fba'として保存
+
+    対応カラム名:
+      日本語版: 出品者SKU / Amazon出荷在庫(合計) / Amazon納品数(発送済み)
+      英語版:   sku / afn-fulfillable-quantity / afn-inbound-shipped-quantity
     """
     snapshot_date = datetime.now().strftime("%Y-%m-%d")
-    df = pd.read_csv(file, sep="	", encoding="utf-8")
+
+    # 複数のエンコーディング・区切り文字に対応
+    for enc, sep in [("cp932", ","), ("utf-8", "\t"), ("utf-8", ",")]:
+        try:
+            if hasattr(file, "seek"):
+                file.seek(0)
+            df = pd.read_csv(file, sep=sep, encoding=enc)
+            if len(df.columns) > 3:
+                break
+        except Exception:
+            continue
+    else:
+        raise ValueError("ファイル形式を認識できません")
+
+    # カラム名の正規化（日本語→英語キー）
+    col_map = {
+        "出品者SKU": "sku",
+        "Amazon出荷在庫(合計)": "afn-fulfillable-quantity",
+        "Amazon納品数(発送済み)": "afn-inbound-shipped-quantity",
+    }
+    df = df.rename(columns=col_map)
 
     if "sku" not in df.columns:
-        raise ValueError("必須カラム 'sku' がありません")
+        raise ValueError("必須カラム '出品者SKU' または 'sku' がありません")
 
     df["sku_code"] = df["sku"].astype(str).str.strip()
     df["quantity"] = pd.to_numeric(
