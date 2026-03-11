@@ -86,6 +86,17 @@ def init_tables(conn: sqlite3.Connection):
         notes TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS inventory_snapshot (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        snapshot_date TEXT NOT NULL,
+        warehouse TEXT NOT NULL,
+        sku_code TEXT NOT NULL,
+        quantity INTEGER NOT NULL DEFAULT 0,
+        inbound_quantity INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_inv_snapshot
+        ON inventory_snapshot(snapshot_date, warehouse, sku_code);
+
     CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT
@@ -141,14 +152,35 @@ def get_latest_inventory(conn: sqlite3.Connection) -> pd.DataFrame:
         GROUP BY sku_code
     """, conn)
 
-    fba = pd.read_sql("""
-        SELECT sku_code,
-               SUM(fulfillable_quantity) as fba_qty,
-               SUM(inbound_shipped_quantity) as fba_inbound_qty
-        FROM inventory_fba
-        WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM inventory_fba)
-        GROUP BY sku_code
-    """, conn)
+    # inventory_fba (SP-API) と inventory_snapshot (CSV) の新しい方を使う
+    fba_spapi_date = conn.execute(
+        "SELECT MAX(snapshot_date) FROM inventory_fba"
+    ).fetchone()[0] or ""
+    fba_csv_date = conn.execute(
+        "SELECT MAX(snapshot_date) FROM inventory_snapshot WHERE warehouse='fba'"
+    ).fetchone()[0] or ""
+
+    if fba_csv_date >= fba_spapi_date:
+        fba = pd.read_sql("""
+            SELECT sku_code,
+                   SUM(quantity) as fba_qty,
+                   SUM(inbound_quantity) as fba_inbound_qty
+            FROM inventory_snapshot
+            WHERE warehouse = 'fba'
+              AND snapshot_date = (
+                  SELECT MAX(snapshot_date) FROM inventory_snapshot
+                  WHERE warehouse = 'fba')
+            GROUP BY sku_code
+        """, conn)
+    else:
+        fba = pd.read_sql("""
+            SELECT sku_code,
+                   SUM(fulfillable_quantity) as fba_qty,
+                   SUM(inbound_shipped_quantity) as fba_inbound_qty
+            FROM inventory_fba
+            WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM inventory_fba)
+            GROUP BY sku_code
+        """, conn)
 
     master = load_product_master(conn)
     if master.empty:

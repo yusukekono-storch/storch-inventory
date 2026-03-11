@@ -13,8 +13,8 @@ init_tables(conn)
 # --- CSVアップロード ---
 st.subheader("📂 CSVアップロード")
 
-tab_master, tab_cainz, tab_rsl, tab_ne = st.tabs([
-    "商品マスター", "カインズ在庫", "RSL在庫", "NextEngine受注"
+tab_master, tab_cainz, tab_rsl, tab_fba, tab_ne = st.tabs([
+    "商品マスター", "カインズ在庫", "RSL在庫", "FBA在庫", "NextEngine受注"
 ])
 
 with tab_master:
@@ -46,6 +46,17 @@ with tab_rsl:
         try:
             count = etl.import_rsl_inventory(conn, file, file.name)
             st.success(f"✅ {count}件の在庫データをインポートしました")
+            st.cache_data.clear()
+        except Exception as e:
+            st.error(f"エラー: {e}")
+
+with tab_fba:
+    st.markdown("FBA在庫管理レポート（TSV タブ区切り, UTF-8）をアップロード")
+    file = st.file_uploader("FBA在庫TSV", type=["tsv", "txt", "csv"], key="fba_upload")
+    if file:
+        try:
+            count = etl.import_fba_inventory_csv(conn, file)
+            st.success(f"✅ {count}件のFBA在庫データをインポートしました")
             st.cache_data.clear()
         except Exception as e:
             st.error(f"エラー: {e}")
@@ -144,7 +155,7 @@ if not master.empty:
 # --- DB情報 ---
 st.markdown("---")
 st.subheader("💾 データベース情報")
-tables = ["product_master", "orders", "amazon_orders", "inventory_cainz", "inventory_rsl", "inventory_fba", "purchase_orders"]
+tables = ["product_master", "orders", "amazon_orders", "inventory_cainz", "inventory_rsl", "inventory_fba", "inventory_snapshot", "purchase_orders"]
 for t in tables:
     count = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
     st.text(f"{t}: {count}件")

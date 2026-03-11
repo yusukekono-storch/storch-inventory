@@ -193,3 +193,39 @@ def import_fba_inventory_from_report(conn: sqlite3.Connection, df: pd.DataFrame)
         count += 1
     conn.commit()
     return count
+
+
+def import_fba_inventory_csv(conn: sqlite3.Connection, file) -> int:
+    """FBA在庫管理レポートTSV（UTF-8, タブ区切り）を取り込む
+    inventory_snapshotテーブルにwarehouse='fba'として保存
+    """
+    snapshot_date = datetime.now().strftime("%Y-%m-%d")
+    df = pd.read_csv(file, sep="	", encoding="utf-8")
+
+    if "sku" not in df.columns:
+        raise ValueError("必須カラム 'sku' がありません")
+
+    df["sku_code"] = df["sku"].astype(str).str.strip()
+    df["quantity"] = pd.to_numeric(
+        df.get("afn-fulfillable-quantity", 0), errors="coerce"
+    ).fillna(0).astype(int)
+    df["inbound_quantity"] = pd.to_numeric(
+        df.get("afn-inbound-shipped-quantity", 0), errors="coerce"
+    ).fillna(0).astype(int)
+    df = df[df["sku_code"] != ""]
+
+    conn.execute(
+        "DELETE FROM inventory_snapshot WHERE snapshot_date=? AND warehouse='fba'",
+        (snapshot_date,),
+    )
+    count = 0
+    for _, row in df.iterrows():
+        conn.execute(
+            """INSERT INTO inventory_snapshot
+               (snapshot_date, warehouse, sku_code, quantity, inbound_quantity)
+               VALUES (?, 'fba', ?, ?, ?)""",
+            (snapshot_date, row["sku_code"], row["quantity"], row["inbound_quantity"]),
+        )
+        count += 1
+    conn.commit()
+    return count
