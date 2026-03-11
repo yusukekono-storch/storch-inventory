@@ -1,0 +1,7 @@
+data/storch.db
+data/storch.db-wal
+data/storch.db-shm
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+.env
