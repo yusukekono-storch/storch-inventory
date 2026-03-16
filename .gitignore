@@ -1,6 +1,5 @@
-data/storch.db
-data/storch.db-wal
-data/storch.db-shm
+data/
+output/
 .streamlit/secrets.toml
 __pycache__/
 *.pyc

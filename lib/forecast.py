@@ -164,3 +164,107 @@ def get_monthly_sales(orders_df: pd.DataFrame, sku_code: str, months: int = 24) 
     sku_orders = sku_orders[sku_orders["order_date"] >= cutoff]
     sku_orders["month"] = sku_orders["order_date"].dt.to_period("M").astype(str)
     return sku_orders.groupby(["month", "channel"])["quantity"].sum().reset_index()
+
+
+# ============================================================
+# generate.py 向けバルク予測関数
+# ============================================================
+
+def compute_seasonal_indices_bulk(orders_df: pd.DataFrame, maker_skus: list) -> pd.Series:
+    """全flexi SKUの合計から月別季節指数を算出
+
+    季節指数 = 各月の平均販売数 ÷ 年間月平均
+    Returns: pd.Series indexed 1-12
+    """
+    df = orders_df[orders_df["sku_code"].isin(maker_skus)].copy()
+    if df.empty:
+        return pd.Series(1.0, index=range(1, 13))
+    df["order_date"] = pd.to_datetime(df["order_date"])
+    df["year_month"] = df["order_date"].dt.to_period("M")
+    monthly = df.groupby("year_month")["quantity"].sum().reset_index()
+    monthly["month_num"] = monthly["year_month"].dt.month
+    avg_by_month = monthly.groupby("month_num")["quantity"].mean()
+    overall_avg = monthly["quantity"].mean()
+    if overall_avg == 0:
+        return pd.Series(1.0, index=range(1, 13))
+    indices = avg_by_month / overall_avg
+    full = pd.Series(1.0, index=range(1, 13))
+    for m in indices.index:
+        full[m] = round(indices[m], 2)
+    return full
+
+
+def compute_monthly_forecast_flexi(orders_df: pd.DataFrame, sku_code: str,
+                                   seasonal_indices: pd.Series,
+                                   target_month: int = None) -> float:
+    """flexi: 加重移動平均 × 季節指数 → 月間予測需要
+
+    直近3ヶ月の加重平均（50%/30%/20%）で基礎需要を算出し、
+    対象月の季節指数を乗算
+    """
+    if target_month is None:
+        target_month = datetime.now().month
+    df = orders_df[orders_df["sku_code"] == sku_code].copy()
+    if df.empty:
+        return 0.0
+    df["order_date"] = pd.to_datetime(df["order_date"])
+    df["year_month"] = df["order_date"].dt.to_period("M")
+    monthly = df.groupby("year_month")["quantity"].sum().sort_index()
+    if len(monthly) == 0:
+        return 0.0
+    # 直近3ヶ月
+    recent = monthly.iloc[-3:] if len(monthly) >= 3 else monthly
+    if len(recent) == 3:
+        base = recent.iloc[-1] * 0.5 + recent.iloc[-2] * 0.3 + recent.iloc[-3] * 0.2
+    elif len(recent) == 2:
+        base = recent.iloc[-1] * 0.6 + recent.iloc[-2] * 0.4
+    else:
+        base = recent.iloc[-1]
+    si = seasonal_indices.get(target_month, 1.0)
+    return max(round(base * si, 1), 0)
+
+
+def compute_monthly_forecast_petzpark(orders_df: pd.DataFrame,
+                                      sku_code: str) -> float:
+    """Petz Park: 単純加重移動平均 → 月間予測需要
+
+    直近3ヶ月の加重平均（50%/30%/20%）
+    データ3ヶ月未満は全期間平均
+    """
+    df = orders_df[orders_df["sku_code"] == sku_code].copy()
+    if df.empty:
+        return 0.0
+    df["order_date"] = pd.to_datetime(df["order_date"])
+    df["year_month"] = df["order_date"].dt.to_period("M")
+    monthly = df.groupby("year_month")["quantity"].sum().sort_index()
+    if len(monthly) == 0:
+        return 0.0
+    if len(monthly) >= 3:
+        base = monthly.iloc[-1] * 0.5 + monthly.iloc[-2] * 0.3 + monthly.iloc[-3] * 0.2
+    else:
+        base = monthly.mean()
+    return max(round(base, 1), 0)
+
+
+def compute_past_12m_sales(orders_df: pd.DataFrame, sku_code: str) -> int:
+    """過去12ヶ月の合計販売数"""
+    df = orders_df[orders_df["sku_code"] == sku_code].copy()
+    if df.empty:
+        return 0
+    df["order_date"] = pd.to_datetime(df["order_date"])
+    cutoff = datetime.now() - timedelta(days=365)
+    recent = df[df["order_date"] >= cutoff]
+    return int(recent["quantity"].sum())
+
+
+def compute_6m_monthly_avg(orders_df: pd.DataFrame, sku_code: str) -> float:
+    """直近6ヶ月の月平均販売数"""
+    df = orders_df[orders_df["sku_code"] == sku_code].copy()
+    if df.empty:
+        return 0.0
+    df["order_date"] = pd.to_datetime(df["order_date"])
+    cutoff = datetime.now() - timedelta(days=180)
+    recent = df[df["order_date"] >= cutoff]
+    if recent.empty:
+        return 0.0
+    return round(recent["quantity"].sum() / 6, 1)
